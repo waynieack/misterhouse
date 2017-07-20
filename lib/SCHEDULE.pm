@@ -713,8 +713,7 @@ sub WinterMode {
             "[SCHEDULE] - DEBUG --- IN WINTERMODE --- TEMP TRACK --- $1")
           if $main::Debug{'schedule'};
         my $fc = $1;
-        if (   ( $fc <= ( $$self{winter_mode_temp} ) )
-            && ( not $$self{winter_mode_track_flag} ) )
+        if (   ( $fc <= ( $$self{winter_mode_temp} ) ) && ( not $$self{winter_mode_track_flag} ) )
         {
             $$self{winter_mode_track_flag} = 1;
             ::print_log(
@@ -724,8 +723,7 @@ sub WinterMode {
               ;    # override the setpoint if current temp is below config
             return 1;
         }
-        elsif (( $fc > ( $$self{winter_mode_temp_high} ) )
-            && ( $$self{winter_mode_track_flag} ) )
+        elsif (( $fc > ( $$self{winter_mode_temp_high} ) ) && ( $$self{winter_mode_track_flag} ) )
         {
             $$self{winter_mode_track_flag} = 0;
             ::print_log(
@@ -870,7 +868,10 @@ sub new {
     $$self{child}       = $child;
     $$self{sub}         = $sub;
     $$self{state_count} = 7;
-    @{ $$self{states} } = ( 'up', 'down' );
+    #@{ $$self{states} } = ( 'up', 'down' );
+    push @{ $$self{states} }, 'up';
+    push @{ $$self{states} }, 'down';
+    for my $i (50..85) { push @{ $$self{states} }, "$i"; } # so the UI will add the slider in the object.
     $parent->register( $self, $child, $HorC );
     return $self;
 }
@@ -894,6 +895,7 @@ sub set {
         $self->SUPER::set( $p_state, $p_setby, 1 );
     }
     if ( $p_state =~ /(\d+)/ ) {
+	 $p_state =~ s/\%//;
         ::print_log(
             "[SCHEDULE::TEMP] Received request "
               . $p_state . " for "
