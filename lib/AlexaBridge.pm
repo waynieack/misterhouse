@@ -753,7 +753,7 @@ sub process_http {
         return $output;
     }
     elsif ( ( $uri =~ /^\/api/ ) && ( lc($request_type) eq "post" ) ) {
-        my $content = qq[\[{"success":{"username":"lights"}}\]];
+        my $content = qq[\[{"success":{"username":"odtQdwTaiTjPgURo4ZyEtGfIqRgfSeCm1fl2AMG2"}}\]];
         my $output  = "HTTP/1.1 200 OK\r\n";
         $output .= "Server: MisterHouse\r\n";
         $output .= 'Access-Control-Allow-Origin: *' . "\r\n";
