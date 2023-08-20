@@ -903,7 +903,7 @@ sub parse_data_to_obj {
 
     $self->debug( 3, "Msg object: " . Dumper( $msg ) );
 
-    if( !$msg->{message} ) {
+    if( !length($msg->{message}) ) {
 	# cleanup message -- ignore
 	return;
     }
@@ -940,7 +940,9 @@ sub parse_data_to_obj {
 			$device_topic =~ s/\+/$split_incoming[$counter]/;
 		    }
 		    if ( $split_device[$counter] eq "#" ) {
-			$device_topic = substr( $device_topic, 0, index( $device_topic, "#" ) ) . substr( $$msg{topic}, index( $device_topic, "#" ) );
+			if( index( $device_topic, '#' ) < length( $msg->{topic} ) ) {
+			    $device_topic = substr( $device_topic, 0, index( $device_topic, "#" ) ) . substr( $$msg{topic}, index( $device_topic, "#" ) );
+			}
 			last;
 		    }
 		    $counter++;

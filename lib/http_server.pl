@@ -354,7 +354,7 @@ sub http_process_request {
             read $socket, $buf, $cl;
 	    $buf = $http_data.$buf if $http_data;
 	    $http_data = '';
-        } elsif ($Http{'Transfer-Encoding'} && ($Http{'Transfer-Encoding'} eq 'chunked')) {
+        } elsif (($Http{'Transfer-Encoding'} && ($Http{'Transfer-Encoding'} eq 'chunked')) || (($Http{'transfer-encoding'} && ($Http{'transfer-encoding'} eq 'chunked')))) {
             print "http POST query has chunked Transfer-Encoding\n"  if $main::Debug{http};
             # We can't read the post body from the socket, so need to get this from $http_data instead
             # Note that this only works with one chunk right now.
@@ -400,7 +400,7 @@ sub http_process_request {
     #
         } elsif ($Http{'Content-Type'} =~ m%^application/(json|x-www-form-urlencoded)%i && $HTTP_BODY =~ /^\{/) {
              print "[http_server.pl]: posting json data\n" if $main::Debug{http};
-        } elsif ($Http{'Transfer-Encoding'} && $HTTP_BODY =~ /^\{/) {
+        } elsif (($Http{'Transfer-Encoding'} && $HTTP_BODY =~ /^\{/) || ($Http{'transfer-encoding'} && $HTTP_BODY =~ /^\{/)) {
              print "[http_server.pl]: posting chunked json data\n" if $main::Debug{http};
         } else {
             &main::print_log("[http_server.pl]: Warning, invalid argument string detected ($buf) ($Http{'Content-Type'}) ($HTTP_BODY)\n");
@@ -3579,7 +3579,7 @@ sub vars_global {
 sub vxml_page {
     my ($vxml) = @_;
 
-my $html = <<eof;
+    my $html = <<eof;
 <?xml version="1.0" encoding="UTF-8"?>
 
 <vxml version="2.0"
