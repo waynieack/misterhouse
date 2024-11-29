@@ -1,4 +1,4 @@
-=head1 B<raZberry> v3.0.7
+=head1 B<raZberry> v3.1.0
 
 #test command setup
 #command queue
@@ -122,6 +122,7 @@ raZberry_max_cmd_queue          Maximum number of commands to queue up (default 
 raZberry_com_threshold          Number of failed polls before controller marked offline (default 4)
 raZberry_command_timeout        Number of seconds after a command is issued before it is abandoned (default 60)
 raZberry_command_timeout_limit  Maximum number of retries for a command before abandoned
+raZberry_alt_blind_states       Use open/closed rather than up/down states
 
 =head2 BUGS
 
@@ -187,6 +188,10 @@ sub new {
     my $self = new Generic_Item();
     bless $self, $class;
     &main::print_log("[raZberry]: v3.0.6 Controller Initializing...");
+    &main::print_log("[raZberry] *******************************************************" );
+    &main::print_log("[raZberry] * Note: raZberry.pm is now depreciated in favour      *");
+    &main::print_log("[raZberry] *       of using Home Assistant for device access     *" );
+    &main::print_log("[raZberry] *******************************************************" );    
     $self->{data}                   = undef;
     $self->{child_object}           = undef;
     
@@ -1256,11 +1261,17 @@ sub new {
     $self->{digital} = 0;
     $self->{digital} = 1
       if ( ( defined $options ) and ( $options =~ m/digital/i ) );
+    my $s_open = 'up';
+    my $s_closed = 'down';
+    if ( defined $main::config_parms{raZberry_alt_blind_states} ) {
+        $s_open = 'open';
+        $s_closed = 'closed';   
+    } 
     if ( $self->{digital} ) {
-        push( @{ $$self{states} }, 'down', '10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%', 'up' );
+        push( @{ $$self{states} }, $s_closed, '10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%', $s_open );
     }
     else {
-        push( @{ $$self{states} }, 'down', 'stop', 'up' );
+        push( @{ $$self{states} }, $s_closed, 'stop', $s_open );
     }
     $self->{battery} = 1
       if ( ( defined $options ) and ( $options =~ m/battery/i ) );
@@ -1283,24 +1294,29 @@ sub new {
 
 sub set {
     my ( $self, $p_state, $p_setby ) = @_;
-
+    my $s_open = 'up';
+    my $s_closed = 'down';
+    if ( defined $main::config_parms{raZberry_alt_blind_states} ) {
+        $s_open = 'open';
+        $s_closed = 'closed';   
+    } 
     if ( defined $p_setby && ( ( $p_setby eq 'poll' ) or ( $p_setby eq 'push' ) ) ) {
         $self->{level} = $p_state;
         my $n_state;
         if ( $p_state == 0 ) {
-            $n_state = "down";
+            $n_state = $s_closed;
         }
         else {
             if ( $self->{digital} ) {
                 if ( $p_state >= 99 ) {
-                    $n_state = "up";
+                    $n_state = $s_open;
                 }
                 else {
                     $n_state = "$p_state%";
                 }
             }
             else {
-                $n_state = "up";
+                $n_state = $s_open;
             }
         }
 
@@ -1311,10 +1327,10 @@ sub set {
     }
     else {
         if ( $self->{digital} ) {
-            if ( lc $p_state eq "down" ) {
+            if ( lc $p_state eq $s_closed ) {
                 $$self{master_object}->set_dev( $$self{devid}, $p_state );
             }
-            elsif ( lc $p_state eq "up" ) {
+            elsif ( lc $p_state eq $s_open ) {
                 $$self{master_object}->set_dev( $$self{devid}, "level=100" );
             }
             elsif ( ( $p_state eq "100%" ) or ( $p_state =~ m/^\d{1,2}\%$/ ) ) {
@@ -1325,8 +1341,8 @@ sub set {
                 main::print_log("[raZberry_blind] Error. Unknown set state $p_state");
             }
         }
-        elsif (( lc $p_state eq "up" )
-            or ( lc $p_state eq "down" )
+        elsif (( lc $p_state eq $s_open )
+            or ( lc $p_state eq $s_closed )
             or ( lc $p_state eq "stop" ) )
         {
             $$self{master_object}->set_dev( $$self{devid}, $p_state );
@@ -2203,6 +2219,9 @@ sub update_data {
 
 # ZWayVDev_zway_18-0-113-8-1-A
 =head2 CHANGELOG 
+v3.1.0
+- raZberry_alt_blind_states config variable to have blinds open/closed instead of up/down to match HA
+
 v3.0.7 
 - fixed offline polling for push operation
 

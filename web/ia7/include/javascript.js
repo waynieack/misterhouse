@@ -1,5 +1,5 @@
 
-var ia7_ver = "v2.1.300";
+var ia7_ver = "v2.2.202";
 var coll_ver = "";
 var entity_store = {}; //global storage of entities
 var json_store = {};
@@ -1050,7 +1050,7 @@ var loadList = function() {
 	var button_text = '';
 	var button_html = '';
 	var entity_arr = [];
-	URLHash.fields = "category,label,sort_order,members,state,states,state_log,hidden,type,text,schedule,logger_status,link,rgb,rrd";
+	URLHash.fields = "category,label,sort_order,members,state,states,state_log,hidden,type,text,schedule,logger_status,state_override,link,rgb,rrd";
 	$.ajax({
 		type: "GET",
 		url: "/json/"+HashtoJSONArgs(URLHash),
@@ -1269,13 +1269,17 @@ var loadList = function() {
 var generateTooltips = function () {
     if ((show_tooltips) && (mobile_device() == "no") ){ //no sense in having tooltips on a touch device
 	    $(".btn").each(function( index ) {
+	    	//console.log($(this).text()+' 	>0 1='+$(this)[0].scrollWidth+' > 2='+$(this).outerWidth());
 	        if ($(this)[0].scrollWidth > 0) {
 	            //if scrollWidth is greater than outerWidth then bootstrap has truncated the button text
 		        if ($(this)[0].scrollWidth > $(this).outerWidth()) {
                     $(this).attr('data-toggle', 'tooltip');
                     $(this).attr('data-placement', 'auto bottom');
-                    $(this).attr('data-original-title', $(this).text());
-                    $(this).attr('title', $(this).text());
+                    var lngth = $(this).find('.object-state').text().length;
+                    var txt = $(this).text().slice(0,(-1 * lngth));
+                    //console.log("text="+$(this).text()+' objectstate='+$(this).find('.object-state').text()+' txt='+txt+' length='+lngth);
+                    $(this).attr('data-original-title', txt);
+                    $(this).attr('title', txt);
                 } else {
                     $(this).attr('data-original-title', '');
                     $(this).attr('title', '');                
@@ -1430,7 +1434,7 @@ var sortArrayByArray = function (listArray, sortArray){
 //Used to dynamically update the state of objects
 var updateList = function(path) {
 	var URLHash = URLToHash();
-	URLHash.fields = "state,state_log,schedule,logger_status,type,rgb,rrd";
+	URLHash.fields = "state,state_log,schedule,logger_status,state_override,type,rgb,rrd";
 	URLHash.long_poll = 'true';
 	URLHash.time = json_store.meta.time;
 	if (updateSocket !== undefined && updateSocket.readyState != 4){
@@ -1505,7 +1509,7 @@ var updateItem = function(item,link,time) {
 		time = "";
 	}
 	var path_str = "/objects"  // override, for now, would be good to add voice_cmds
-	var arg_str = "fields=state,states,label,state_log,schedule,logger_status,rgb,rrd&long_poll=true&items="+item+"&time="+time;
+	var arg_str = "fields=state,states,label,state_log,schedule,logger_status,state_override,rgb,rrd&long_poll=true&items="+item+"&time="+time;
 	$.ajax({
 		type: "GET",
 		url: "/LONG_POLL?json('GET','"+path_str+"','"+arg_str+"')",		
@@ -1558,7 +1562,7 @@ var updateStaticPage = function(link,time) {
    		 }
    	})
 	var URLHash = URLToHash();
-	URLHash.fields = "state,states,state_log,schedule,logger_status,label,type,rgb,rrd";
+	URLHash.fields = "state,states,state_log,schedule,logger_status,state_override,label,type,rgb,rrd";
 	URLHash.long_poll = 'true';
 	URLHash.time = json_store.meta.time;
 	if (updateSocket !== undefined && updateSocket.readyState != 4){
@@ -1567,7 +1571,7 @@ var updateStaticPage = function(link,time) {
 	}
 
 	var path_str = "/objects"  // override, for now, would be good to add voice_cmds
-	var arg_str = "fields=state%2Cstates%2Cstate_log%2Cschedule%2Clogger_status%2Clabel&long_poll=true&items="+items+"&time="+time;
+	var arg_str = "fields=state%2Cstates%2Cstate_log%2Cschedule%2Clogger_status%2Cstate_override%2Clabel&long_poll=true&items="+items+"&time="+time;
 
 	updateSocket = $.ajax({
 		type: "GET",
@@ -1731,7 +1735,7 @@ var loadCollection = function(collection_keys) {
 		if (item !== undefined) {
 			if (json_store.objects === undefined || json_store.objects[item] === undefined) {
 				var path_str = "/objects";
-				var arg_str = "fields=state,states,label,state_log,schedule,logger_status,&items="+item;
+				var arg_str = "fields=state,states,label,state_log,schedule,logger_status,state_override,&items="+item;
 				$.ajax({
 					type: "GET",
 					url: "/json"+path_str+"?"+arg_str,
@@ -2452,7 +2456,7 @@ var graph_rrd = function(start,group,time) {
 		updateSocket.abort();
 	}	
 	var path_str = "/rrd"  
-	console.log("db start="+start+" group="+group+" time="+time);
+	//console.log("db start="+start+" group="+group+" time="+time);
 	var source = "&group="+group;
 	//if the group starts with file= then it is an object/file
 	if (group.toLowerCase().startsWith("file:")) {
@@ -3175,7 +3179,7 @@ var floorplan = function(group,time) {
     };
 
     var path_str = "/objects";
-    var fields = "fields=fp_location,state,states,fp_icons,schedule,logger_status,fp_icon_set,img,link,label,type";
+    var fields = "fields=fp_location,state,states,fp_icons,schedule,logger_status,fp_icon_set,img,link,label,type,state_override";
     if (json_store.ia7_config.prefs.state_log_show === "yes") fields += ",state_log";
     var arg_str = "parents="+group+"&"+fields+"&long_poll=true&time="+time;
 
@@ -3634,9 +3638,13 @@ var create_state_modal = function(entity) {
 		$('#control').find('.object-title').html(title);
 		$('#control').find('.control-dialog').attr("entity", entity);
 		var modal_states = json_store.objects[entity].states;
+		var rgb_only = 0;
+		if (modal_states !== undefined) if (modal_states.length == 1 && modal_states[0] == 'rgb') rgb_only = 1;
+		//console.log("rgb_only ="+rgb_only+" "+modal_states.length+" "+modal_states[0]);
+//HP RGB control updates
 		// HP need to have at least 2 states to be a controllable object...
 		if (modal_states == undefined) modal_states = 1;
-		if (modal_states.length > 1) {
+		if (modal_states.length > 1 || rgb_only) {
 			$('#control').find('.states').html('<div class="btn-group stategrp0 btn-block"></div>');
 			var modal_states = json_store.objects[entity].states;
 			var buttonlength = 0;
@@ -3647,8 +3655,10 @@ var create_state_modal = function(entity) {
 			var group_buttons = 4;
 
 			var slider_active = 1;
-            if (!sliderObject(modal_states) || (json_store.ia7_config.prefs.state_slider !== undefined && json_store.ia7_config.prefs.state_slider == "no")) slider_active = 0;
+		//console.log("slider ="+sliderObject(modal_states)+", "+json_store.ia7_config.prefs.state_slider+", "+json_store.ia7_config.prefs.state_slider);
 
+            if ((!sliderObject(modal_states) && !rgb_only) || (json_store.ia7_config.prefs.state_slider !== undefined && json_store.ia7_config.prefs.state_slider == "no")) slider_active = 0;
+        //console.log("slider_active="+slider_active);
 			// get number of displayed buttons so we can display nicely.
 			for (var i = 0; i < modal_states.length; i++){
 				if (filterSubstate(modal_states[i],slider_active) !== 1) display_buttons++
@@ -3693,6 +3703,10 @@ var create_state_modal = function(entity) {
                             disabled = "";
                         }
                     }
+                    //override state if set in the object (ie HA_Item:Cover)
+                    if (json_store.objects[entity].state_override) {
+                        disabled = "";
+                    }                  
                 $('#control').find('.states').find(".stategrp"+stategrp).append("<button class='btn col-sm-"+grid_buttons+" col-xs-"+grid_buttons+" btn-"+color+" "+disabled+"'>"+modal_states[i]+"</button>");					
                 }
                 if (slider_active) {
@@ -3700,7 +3714,7 @@ var create_state_modal = function(entity) {
                         $(".stategrp0").remove();
                     }
                    var slider_data = sliderDetails(modal_states);		                
-                   $('#control').find('.states').append("<div id='slider' class='brightness-slider'></div>");					
+                   $('#control').find('.states').append("<div id='slider' class='brightness-slider lumen-slider'></div>");					
                    var val = $(".modal-object-state").text().replace(/\%/,'');              
                    var position = slider_data.values.indexOf(val);
                    if (val == "on") position = slider_data.max;
@@ -3740,7 +3754,9 @@ var create_state_modal = function(entity) {
                        });
                    });
                 if (json_store.objects[entity].rgb !== undefined) {
-                        $('#control').find('.states').append("<br><div id='sliderR' class='rgb-slider brightness-slider red-handle'></div>");					
+                        var firstbreak = "<br>";
+                        if (rgb_only) firstbreak = "";
+                        $('#control').find('.states').append(firstbreak+"<div id='sliderR' class='rgb-slider brightness-slider red-handle'></div>");					
                         $('#control').find('.states').append("<br><div id='sliderG' class='rgb-slider brightness-slider green-handle'></div>");					
                         $('#control').find('.states').append("<br><div id='sliderB' class='rgb-slider brightness-slider blue-handle'></div>");
                         
@@ -3783,6 +3799,11 @@ var create_state_modal = function(entity) {
                  }
         if (slider_active) {
 		    advanced_html = "<br>"+advanced_html; //this is clunky but showing advanced states is kinda ugly anyways
+        }
+        if (rgb_only) {
+            $(".stategrp0").remove();
+            $(".lumen-slider").remove();
+            
         }
 		$('#control').find('.states').append("<div class='btn-group advanced btn-block'>"+advanced_html+"</div>");
 
@@ -4014,7 +4035,7 @@ var create_state_modal = function(entity) {
 var create_develop_item_modal = function(colid,col_parent) {
 
     if (colid == undefined || col_parent == undefined) {
-        console.log("create develop modal, colid="+colid+" col_parent="+col_parent);
+        //console.log("create develop modal, colid="+colid+" col_parent="+col_parent);
     } else {        
         $('#devModal').find('.modal-title').html("Edit Collection ID: <strong>"+colid+"</colid>");
         var html = "<form class='form-horizontal dev-collection-edit'>";
@@ -4183,7 +4204,7 @@ var create_develop_item_modal = function(colid,col_parent) {
                   currentUser: {user: current_user},
                   success: function( data, status, error){
                         var user = this.currentUser.user;
-                        console.log("data="+data+" status="+status+" error="+error+" user="+user);
+                        //console.log("data="+data+" status="+status+" error="+error+" user="+user);
                         //throw up red warning if the response isn't good from MH
                         if (data.status !== undefined || data.status == "error") {
                             var message = "Unknown server error";
@@ -4204,8 +4225,8 @@ var create_develop_item_modal = function(colid,col_parent) {
                         var user = this.currentUser.user;                        
                         var data = JSON.parse(xhr.responseText);
                         if (data !== undefined && data.text !== undefined) message = data.text;
-                        console.log("status="+status);
-                        console.log("error="+error);
+                        //console.log("status="+status);
+                        //console.log("error="+error);
                         $(".modal-header").append($("<div class='write-status alert alerts-modal alert-danger fade in' data-alert><p><i class='fa fa-exclamation-triangle'>&nbsp;</i><strong>Failure:</strong>&nbsp;"+message+"</p></div>"));
    	 		            $(".write-status").delay(4000).fadeOut("slow", function () { $(this).remove(); });
    	 		            json_store.collections[700].user = user;
@@ -4786,7 +4807,7 @@ $(document).ready(function() {
                 if (!cls.match('ui-sortable-helper')) {
                     var colid = $(this).attr("colid");
                     var col_parent=500;
-                    console.log("option colid="+colid+" col_parent="+col_parent);
+                    //console.log("option colid="+colid+" col_parent="+col_parent);
                     create_develop_item_modal(colid,col_parent);
                     $('#optionsModal').modal('hide');    
                 }            

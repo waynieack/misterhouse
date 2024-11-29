@@ -212,39 +212,109 @@ package AoGSmartHome_Items;
 @AoGSmartHome_Items::ISA = ('Generic_Item');
 
 use Data::Dumper;
-use Storable;
+use Storable qw(nstore retrieve);
+
+#--------------Logging and debugging functions----------------------------------------
+
+sub break_long_str {
+    my ($self, $str, $prefix, $maxlength) = @_;
+    my $result;
+
+    $result = '';
+    $str = $str || '';
+    while( length( $str ) > $maxlength ) {
+        my $l = 0;
+        my $i;
+        for( $i=0; $i<length($str) && $l<$maxlength; ++$i,++$l ) {
+            if( substr( $str, $i, 1 ) eq "\n" ) {
+                $l = 0;
+            }
+        }
+        $result .= $prefix;
+        $result .= substr( $str, 0, $i );
+        $str = substr( $str, $i );
+        $prefix = '....  ';
+    }
+    if( $str ) {
+        $result .= $prefix;
+        $result .= $str;
+    }
+    return $result;
+}
+
+sub log {
+    my ($self, $str, $prefix) = @_;
+
+    if( !defined( $prefix ) ) {
+        $prefix = '[AoG]: ';
+    }
+    $str = $self->break_long_str( $str, $prefix, 300 );
+
+    &main::print_log( $str );
+}
+
+sub debug {
+    my( $self, $level, $str ) = @_;
+    if( $main::Debug{aog} >= $level ) {
+        $level = 'D' if $level == 0;
+        $self->log( $str, "[AoG] D$level: " );
+    }
+}
+
+sub error {
+    my ($self, $str, $level ) = @_;
+    $self->log( $self, $str, "[AoG] ERROR: " );
+}
+
+sub dump {
+    my( $self, $obj, $maxdepth ) = @_;
+    $obj = $obj || $self;
+    $maxdepth = $maxdepth || 2;
+    my $dumper = Data::Dumper->new( [$obj] );
+    $dumper->Maxdepth( $maxdepth );
+    return $dumper->Dump();
+}
+
+#----------------------------------------------------------------------------------------------
+
+sub get_mh_object {
+    my ($self, $realname) = @_;
+    my $mh_object = ::get_object_by_name($realname);
+    if( !defined $mh_object ) {
+	$self->error( "Invalid device $realname; ignoring AoG item." );
+    }
+    return $mh_object;
+}
 
 sub set_state {
-    my ( $self, $uuid, $state ) = @_;
+    my ( $self, $item, $state ) = @_;
 
-    my $name     = $self->{'uuids'}->{$uuid}->{'name'};
-    my $realname = $self->{'uuids'}->{$uuid}->{'realname'};
-    my $sub      = $self->{'uuids'}->{$uuid}->{'sub'};
-    my $statesub = $self->{'uuids'}->{$uuid}->{'statesub'};
+    my $name     = $item->{'name'};
+    my $realname = $item->{'realname'};
+    my $sub      = $item->{'sub'};
 
-	# Map state if there is a mapping defined
-    $state = $self->{'uuids'}->{$uuid}->{ lc($state) } if $self->{'uuids'}->{$uuid}->{ lc($state) };
+    # Map state if there is a mapping defined
+    $state = $item->{ lc($state) } if $item->{ lc($state) };
 
-    print STDERR "[AoGSmartHome] Debug: set_state(uuid='$uuid', state='$state', name='$name' realname='$realname' sub='$sub')\n"
-      if $main::Debug{'aog'} > 2;
+    $self->debug( 2, "set_state(name='$name' realname='$realname' sub='$sub' state='$state')" );
 
     if ( $sub =~ /^voice[_-]cmd:\s*(.+)\s*$/ ) {
         my $voice_cmd = $1;
 
 	$voice_cmd =~ s/[#!]/$state/;
 
-	print STDERR "[AoGSmartHome] Debug: running voice command \'$voice_cmd\'\n"
-	  if $main::Debug{'aog'};
+	$self->debug( 1, "running voice command \'$voice_cmd\'" );
+
 	&main::run_voice_cmd("$voice_cmd");
 
 	return;
     }
     elsif ( ref $sub eq 'CODE' ) {
-        my $mh_object = ::get_object_by_name($realname);
-	&main::print_log("[AoGSmartHome] Invalid device $realname; ignoring AoG item.") if ( !defined $mh_object );
-        return undef if !defined $mh_object;
+        my $mh_object = $self->get_mh_object($realname);
+	return undef if !defined $mh_object;
 
-	print STDERR "[AoGSmartHome] Debug: running sub $sub(set, $state)\n" if $main::Debug{'aog'};
+	$self->debug( 1, "running sub $sub(set, $state)" );
+
 	&{$sub}($mh_object, $state, 'AoGSmartHome');
 	return;
     }
@@ -253,16 +323,14 @@ sub set_state {
         # Treat as a MisterHouse object, using $sub as the 'set' function.
         #
 
-        my $mh_object = ::get_object_by_name($realname);
-		&main::print_log("[AoGSmartHome] Invalid device $realname; ignoring AoG item.") if ( !defined $mh_object );
-        return undef if !defined $mh_object;
+        my $mh_object = $self->get_mh_object($realname);
+	return undef if !defined $mh_object;
 
 	if ( $mh_object->can('is_dimmable') && $mh_object->is_dimmable && $state =~ /\d+/ ) {
 	    $state = $state . '%';
 	}
 
-	print STDERR "[AoGSmartHome] Debug: setting object $realname to state '$state'\n"
-	  if $main::Debug{'aog'};
+	$self->debug( 1, "setting object $realname to state '$state'" );
 
 	$mh_object->$sub( $state, 'AoGSmartHome' );
 
@@ -271,33 +339,29 @@ sub set_state {
 }
 
 sub get_state {
-    my ( $self, $uuid, $state ) = @_;
+    my ( $self, $item ) = @_;
 
-    my $name     = $self->{'uuids'}->{$uuid}->{'name'};
-    my $realname = $self->{'uuids'}->{$uuid}->{'realname'};
-    my $sub      = $self->{'uuids'}->{$uuid}->{'sub'};
-    my $statesub = $self->{'uuids'}->{$uuid}->{'statesub'};
+    my $name     = $item->{'name'};
+    my $realname = $item->{'realname'};
+    my $sub      = $item->{'sub'};
+    my $statesub = $item->{'statesub'};
 
-    # ???
-    $state = $self->{'uuids'}->{$uuid}->{ lc($state) } if $self->{'uuids'}->{$uuid}->{ lc($state) };
-
-    print STDERR "[AoGSmartHome] Debug: get_state(uuid='$uuid', state='$state', name='$name' realname='$realname' sub='$sub')\n"
-      if $main::Debug{'aog'} > 2;
+    $self->debug( 2, "get state(name='$name' realname='$realname' statesub='$statesub')" );
 
     if ( $sub =~ /^voice[_-]cmd:\s*(.+)\s*$/ ) {
         my $voice_cmd = $1;
 
 	# FIXME -- "get" on voice command? Hhhmmm
+	$self->error( "get_state called on a voice command $realname" );
 	return qq["on":true,"bri":254];
     }
     elsif ( ref $statesub eq 'CODE' ) {
-        my $mh_object = ::get_object_by_name($realname);
-	&main::print_log("[AoGSmartHome] Invalid device $realname; ignoring AoG item.") if ( !defined $mh_object );
-        return undef if !defined $mh_object;
+        my $mh_object = $self->get_mh_object($realname);
+	return undef if !defined $mh_object;
 
-	my $debug = "[AoGSmartHome] Debug: get_state() running sub: $statesub('$realname') - ";
+	my $debug = "get_state() running sub: $statesub('$realname') - ";
 	my $state = &{$statesub}($mh_object);
-	print STDERR "$debug returning - $state\n" if $main::Debug{'aog'};
+	$self->debug( 1, "$debug returning - $state" );
 	return $state;
     }
     else {
@@ -305,25 +369,60 @@ sub get_state {
         # Treat as a MisterHouse object, using $statesub as the 'state' function.
         #
 
-        my $mh_object = ::get_object_by_name($realname);
-	&main::print_log("[AoGSmartHome] Invalid device $realname; ignoring AoG item.") if ( !defined $mh_object );
-        return undef if !defined $mh_object;
+        my $mh_object = $self->get_mh_object($realname);
+	return undef if !defined $mh_object;
 
 	my $cstate = $mh_object->$statesub();
 	$cstate =~ s/\%//;
 	my $type  = $mh_object->get_type();
-	my $debug = "[AoGSmartHome] Debug: get state() -- actual object state: $cstate, object type: $type, ";
+	my $debug = "get state($realname) -- actual object state: $cstate, object type: $type, ";
 
 	if ( $type =~ /X10/i ) {
 	    $cstate = 'on' if $cstate =~ /\d+/ || $cstate =~ /dim/ || $cstate =~ /bright/;
 	    $debug .= "determined state: $cstate, ";
 	}
 
-	$debug .= "$debug returning $cstate\n";
+	$debug .= "$debug returning $cstate";
 
-	print STDERR $debug if $main::Debug{'aog'} > 2;
+	$self->debug( 1, $debug );
 
 	return $cstate;
+    }
+}
+
+sub get_state_list {
+    my ( $self, $mode ) = @_;
+
+    my $name		= $mode->{'name'};
+    my $realname	= $mode->{'realname'};
+    my $sub		= $mode->{'sub'};
+    my $statelistsub    = $mode->{'statelistsub'};
+
+    $self->debug( 2, "get_state_list(name='$name' realname='$realname' sub='$sub')" );
+
+    if ( ref $statelistsub eq 'CODE' ) {
+        my $mh_object = $self->get_mh_object($realname);
+	if( !defined $mh_object ) {
+	    $mh_object = $realname;
+	}
+
+	my $debug = "get_state_list() running sub: $statelistsub('$realname') - ";
+	my @statelist = &{$statelistsub}($mh_object);
+	$self->debug( 1, "$debug returning - @statelist" );
+	return (@statelist);
+    }
+    else {
+        #
+        # Treat as a MisterHouse object, using $statelistsub as the 'statelist' function.
+        #
+
+        my $mh_object = $self->get_mh_object($realname);
+	return undef if !defined $mh_object;
+
+	my $debug = "get_state_list() running sub: $statelistsub('$realname') - ";
+	my @statelist = $mh_object->$statelistsub();
+	$self->debug( 1, "$debug returning - @statelist" );
+	return (@statelist);
     }
 }
 
@@ -338,11 +437,7 @@ sub new {
         my $restoredhash = retrieve($file);
         $self->{idmap} = $restoredhash->{idmap};
 
-        if ( $main::Debug{'aog'} ) {
-            print STDERR "[AoGSmartHome] Debug: dumping persistent IDMAP:\n";
-            print STDERR Dumper $self->{idmap};
-            print STDERR "[AoGSmartHome] Debug: done.\n";
-        }
+	$self->debug( 1, "dumping persistent IDMAP:\n" . $self->dump( $self->{idmap} ) );
     }
 
     return $self;
@@ -368,8 +463,8 @@ sub add {
 
 
     if( !$realname ) {
-		&main::print_log("[AoGSmartHome] Realname must be specified for persistent idmap; ignoring AoG item.");
-		return;
+	$self->error( "Realname must be specified for persistent idmap; ignoring AoG item." );
+	return;
     }
 	
     if ( !$name ) {
@@ -391,32 +486,92 @@ sub add {
 		$type = $value;
 
 		# Check that the type is a supported one
-		if ($type ne 'light' && $type ne 'scene' && $type ne 'switch'
-		    && $type ne 'outlet'&& $type ne 'thermostat') {
-		    &main::print_log("[AoGSmartHome] Invalid device type '$type'; ignoring AoG item.");
+		if( $type ne 'light' && $type ne 'scene' && $type ne 'switch'
+		&&  $type ne 'outlet'&& $type ne 'thermostat' && $type ne 'select'
+		) {
+		    $self->error( "Invalid device type '$type'; ignoring AoG item." );
 		    return;
 		}
 	    } elsif ($parm eq 'room') {
 		$room = $value;
 	    } else {
-		&main::print_log("[AoGSmartHome] Invalid device property '$parm'; ignoring AoG item.");
+		$self->error( "Invalid device property '$parm'; ignoring AoG item." );
 		return;
 	    }
 	}
-    }
+    };
+    $type = lc($type) || 'light';
 
     my $uuid = $self->uuid($realname);
 
+    if( $type eq 'select' ) {
+	$self->add_mode_trait( $realname, $realname, 'Mode', $sub, undef, $statesub, 0 );
+    }
     $self->{'uuids'}->{$uuid}->{'realname'} = $realname;
     $self->{'uuids'}->{$uuid}->{'name'}     = $name;
     $self->{'uuids'}->{$uuid}->{'sub'}      = $sub || 'set';
     $self->{'uuids'}->{$uuid}->{'on'}       = lc($on) || 'on';
     $self->{'uuids'}->{$uuid}->{'off'}      = lc($off) || 'off';
     $self->{'uuids'}->{$uuid}->{'statesub'} = $statesub || 'state';
+    $self->{'uuids'}->{$uuid}->{'statelistsub'} = 'get_states';
     # If no device type is provided we default to 'light'
-    $self->{'uuids'}->{$uuid}->{'type'}     = lc($type) || 'light';
+    $self->{'uuids'}->{$uuid}->{'type'}     = $type;
     $self->{'uuids'}->{$uuid}->{'room'}     = $room if $room;
-	print "[AoGSmartHome] Added AOG device:\n    " . Dumper( $self->{'uuids'}->{$uuid} ) if $main::Debug{'aog'} > 2;
+    $self->debug( 2, "Added AOG device:\n    " . $self->dump( $self->{'uuids'}->{$uuid} ) );
+}
+
+=item C<add_mode_trait()>
+
+Presents MisterHouse objects, subs, or voice coommands to the Actions on
+Google Smart Home API.
+
+add('<actual object name>', '<friendly object name>',
+'<subroutine used to change the object state>',
+'<State mapped to AoG Smart Home ON command>',
+'<State mapped to AoG Smart Home OFF command>',
+'<subroutine used to get the object state>'
+'<Aog Smart Home device type>);
+
+=cut
+
+sub add_mode_trait {
+    my ( $self, $itemname, $modename, $name, $sub, $statelistsub, $statesub, $ordered ) = @_;
+    my ($type, $room); # AoG Smart Home Provider device properties
+
+
+    $self->debug( 2, "Adding AOG mode trait '$modename' as ($name) to $itemname:\n    " . $self->dump( $mode ) );
+    my $uuid = $self->{'idmap'}->{objects}->{$itemname};
+    if( !$itemname  ||  !$uuid ) {
+	$self->error( "Add_mode_trait -- Itemname for existing AoG item must be specified; ignoring AoG mode." );
+	return;
+    }
+	
+    if ( !$name ) {
+        $name = $modename;
+        $name =~ s/\$//g;
+        $name =~ s/_/ /g;    # Otherwise the Google Assistant will say
+                             # "kitchen-underscore-light" instead of
+                             # "kitchen light".
+        $name =~ s/#//g;
+        $name =~ s/\\//g;
+        $name =~ s/&//g;
+    }
+    my $keyname = lc($name) . '_key';
+
+    my $mode = {};
+
+    $mode->{'realname'}		= $modename;
+    $mode->{'name'}		= $name;
+    $mode->{'keyname'}		= $keyname;
+    $mode->{'sub'}		= $sub || 'set_now';
+    $mode->{'statelistsub'}	= $statelistsub || 'get_states';
+    $mode->{'statesub'}		= $statesub  || 'state';
+    $mode->{'ordered'}		= $ordered || 0;
+
+    $self->{'uuids'}->{$uuid}->{modes} = {} if !defined $self->{'uuids'}->{$uuid}->{modes};
+    $self->{'uuids'}->{$uuid}->{modes}->{$keyname} = $mode;
+
+    $self->debug( 2, "Added AOG mode trait '$modename' to $itemname:\n    " . $self->dump( $mode ) );
 }
 
 =item C<sync()>
@@ -447,6 +602,7 @@ EOF
     foreach my $uuid ( keys %{ $self->{'uuids'} } ) {
         my $type = $self->{'uuids'}->{$uuid}->{'type'};
 
+	$self->debug( 1, "Object added: $self->{'uuids'}->{$uuid}->{'realname'}" );
         if ( $type eq 'light' ) {
             $response .= <<EOF;
    {
@@ -457,12 +613,10 @@ EOF
 EOF
 
 	    # Check whether the light is dimmable so we can communicate that
-	    # the device has the "Brightness" trait. Other types of dimmable
-	    # objects will have to be added here (right now we only check for
-	    # INSTEON and X10 dimmable lights).
-	    &main::print_log("[AoGSmartHome] Object Name: ". $self->{'uuids'}->{$uuid}->{'realname'} ."\n");
-	    my $mh_object = ::get_object_by_name($self->{'uuids'}->{$uuid}->{'realname'});
-	    &main::print_log("[AoGSmartHome] Invalid device ".$self->{'uuids'}->{$uuid}->{'realname'}."; ignoring AoG item.") if ( !defined $mh_object );
+	    # the device has the "Brightness" trait. Done by calling
+	    # is_dimmable method on the object.
+
+	    my $mh_object = $self->get_mh_object($self->{'uuids'}->{$uuid}->{'realname'});
 	    return undef if !defined $mh_object;
 
 	    if( $mh_object->can('is_dimmable') && $mh_object->is_dimmable ) {
@@ -470,6 +624,7 @@ EOF
      "action.devices.traits.Brightness",
 EOF
 	    }
+	    $response .= $self->sync_modes_trait( $uuid );
 
 	    $response =~ s/,$//;    # Remove extra ','
 
@@ -486,6 +641,7 @@ EOF
     "roomHint": "$self->{'uuids'}->{$uuid}->{'room'}",
 EOF
 	    }
+	    $response .= $self->sync_modes( $uuid );
 
 	    $response =~ s/,$//;    # Remove extra ','
 
@@ -501,12 +657,18 @@ EOF
 	    #
 
 	    $type = uc $type;
+	    if( $self->{'uuids'}->{$uuid}->{modes} ) {
+		$type = 'DRYER';
+	    }
 
             $response .= <<EOF;
    {
     "id": "$uuid",
     "type": "action.devices.types.$type",
     "traits": [
+EOF
+	    $response .= $self->sync_modes_trait( $uuid );
+            $response .= <<EOF;
      "action.devices.traits.OnOff"
     ],
     "name": {
@@ -520,6 +682,7 @@ EOF
     "roomHint": "$self->{'uuids'}->{$uuid}->{'room'}",
 EOF
 	    }
+	    $response .= $self->sync_modes( $uuid );
 
 	    $response =~ s/,$//;    # Remove extra ','
 
@@ -527,12 +690,11 @@ EOF
    },
 EOF
         } elsif ( $type eq 'thermostat') {
-	    my $mh_object = ::get_object_by_name($self->{'uuids'}->{$uuid}->{'realname'});
-	    &main::print_log("[AoGSmartHome] Invalid device ".$self->{'uuids'}->{$uuid}->{'realname'}."; ignoring AoG item.") if ( !defined $mh_object );
+	    my $mh_object = $self->get_mh_object($self->{'uuids'}->{$uuid}->{'realname'});
 	    return undef if !defined $mh_object;
 
 	    if (!$mh_object->isa('Insteon::Thermostat') ) {
-		&main::print_log("[AoGSmartHome] '$self->{'uuids'}->{$uuid}->{'realname'} is an unsupported thermostat; ignoring AoG item.");
+		$self->error( "'$self->{'uuids'}->{$uuid}->{'realname'}' is an unsupported thermostat; ignoring AoG item.");
 		next;
 	    }
 
@@ -571,6 +733,8 @@ EOF
     "id": "$uuid",
     "type": "action.devices.types.SCENE",
     "traits": [
+EOF
+            $response .= <<EOF;
      "action.devices.traits.Scene"
     ],
     "name": {
@@ -582,7 +746,25 @@ EOF
     }
    },
 EOF
-        }
+        } elsif ( $type eq 'select' ) {
+            $response .= <<EOF;
+   {
+    "id": "$uuid",
+    "type": "action.devices.types.DRYER",
+    "traits": [
+     "action.devices.traits.Modes"
+    ],
+    "name": {
+     "name": "$self->{'uuids'}->{$uuid}->{'name'}"
+    },
+    "willReportState": false,
+EOF
+	    $response .= $self->sync_modes( $uuid );
+	    $response =~ s/,$//;    # Remove extra ','
+	    $response .= <<EOF;
+   },
+EOF
+	}
     }
 
     $response =~ s/,$//;    # Remove extra ','
@@ -593,13 +775,109 @@ EOF
 }
 EOF
 
-    if ( $main::Debug{'aog'} ) {
-        print STDERR "[AoGSmartHome] Debug: action.devices.SYNC response:\n";
-        print STDERR $response;
-        print STDERR "[AoGSmartHome] Debug: end of response.\n";
-    }
+    $self->debug( 2, "action.devices.SYNC response:\n$response" );
 
     return &main::json_page($response);
+}
+
+sub sync_modes_trait {
+    my ($self, $uuid ) = @_;
+    my $response = '';
+
+    if( !defined $self->{'uuids'}->{$uuid}->{modes} ) {
+	return $response;
+    }
+    $response .= <<EOF;
+     "action.devices.traits.Modes",
+EOF
+    return $response;
+}
+
+sub sync_modes {
+    my ($self, $uuid, $do_attributes_clause ) = @_;
+    my $response = '';
+
+    $do_attributes_clause = 1 if !defined $do_attributes_clause;
+    if( !defined $self->{'uuids'}->{$uuid}->{modes} ) {
+	return $response;
+    }
+
+    # $response = main::read_file( '\tmp\attrs.txt' ) . "\n";
+    # return $response;
+
+
+    my @mode_list = values %{$self->{'uuids'}->{$uuid}->{modes}};
+    $self->debug( 2, "Syncing modes on  AOG device:\n    " . $self->dump( $self->{'uuids'}->{$uuid} ) );
+    $self->debug( 2, "   mode_list:  " . $self->dump( @mode_list ) );
+
+    if( $do_attributes_clause ) {
+	$response .= <<EOF;
+    "attributes": {
+EOF
+    }
+    $response .= <<EOF;
+        "availableModes": [
+EOF
+
+    for my $mode (@mode_list) {
+	my @statelist = $self->get_state_list( $mode );
+	if( scalar(@statelist) == 0 ) {
+	    $self->error( "Invalid mode -- no state list $mode->{'realname'}; ignoring AoG item." );
+            next;
+	}
+	$response .= <<EOF;
+           {
+            "name": "$$mode{keyname}",
+	    "name_values": [
+	      {
+	        "name_synonym": [
+	          "$$mode{name}"
+	        ],
+	        "lang": "en"
+	      }
+	    ],
+	    "settings": [
+EOF
+	foreach my $state (@statelist) {
+	    $response .= <<EOF;
+	      {
+	        "setting_name": "${state}_key",
+	        "setting_values": [
+		   {
+		     "setting_synonym": [
+		        "${state}"
+		     ],
+		     "lang": "en"
+		   }
+	        ]
+	      },
+EOF
+	}
+	$response =~ s/,$//;
+
+	my $ordered = 'false';
+	if( $mode->{ordered} ) {
+	    $ordered = 'true';
+	}
+	$response .= <<EOF;
+             ],
+	     "ordered": $ordered
+           },
+EOF
+    }
+    $response =~ s/,$//;
+
+    $response .= <<EOF;
+        ]
+EOF
+
+    if( $do_attributes_clause ) {
+	    $response .= <<EOF;
+    },
+EOF
+    }
+    $self->debug( 2, "sync_modes response: \n$response" );
+    return $response;
 }
 
 =item C<query()>
@@ -622,6 +900,7 @@ EOF
 	my $uuid = $device->{'id'}; # Makes things easier below...
 
         if ( !exists $self->{'uuids'}->{$uuid} ) {
+	    $self->error( "No device id $uuid found");
             $response .= <<EOF;
    "$uuid": {
     "errorCode": "deviceNotFound"
@@ -633,14 +912,16 @@ EOF
         if ( $self->{'uuids'}->{$uuid}->{'type'} eq 'scene' ) {
             $response .= <<EOF;
    "$uuid": {
+EOF
+	    $response .= $self->query_modes( $uuid );
+            $response .= <<EOF;
     "online": true
    },
 EOF
             next;
         }
         elsif ( $self->{'uuids'}->{$uuid}->{'type'} eq 'thermostat' ) {
-	    my $mh_object = ::get_object_by_name($self->{'uuids'}->{$uuid}->{'realname'});
-	    &main::print_log("[AoGSmartHome] Invalid device ".$self->{'uuids'}->{$uuid}->{'realname'}."; ignoring AoG item.") if ( !defined $mh_object );
+	    my $mh_object = $self->get_mh_object($self->{'uuids'}->{$uuid}->{'realname'});
 	    return undef if !defined $mh_object;
 
 	    if ($mh_object->isa('Insteon::Thermostat') ) {
@@ -688,59 +969,93 @@ EOF
 	    # "sync" response
 
 	    next;
-	}
-        #
-        # The device is a light, a switch, or an outlet.
-        #
+        }
+        elsif ( $self->{'uuids'}->{$uuid}->{'type'} eq 'select' ) {
+	    my $mh_object = $self->get_mh_object($self->{'uuids'}->{$uuid}->{'realname'});
+	    next if !defined $mh_object;
 
-        my $devstate = get_state( $self, $uuid );
-        if ( !defined $devstate ) {
-            $response .= <<EOF;
+	    my $devstate = get_state( $self, $self->{'uuids'}->{$uuid} );
+	    if ( !defined $devstate ) {
+		$self->error( "Device $self->{'uuids'}->{$uuid}->{'realname'} has no state; ignoring AoG item.");
+		$response .= <<EOF;
    "$uuid": {
     "errorCode": "deviceNotFound"
    },
 EOF
-            next;
-        }
-
-	$response .= <<EOF;
+		next;
+	    }
+	    my $mode_query = $self->query_modes( $uuid );
+	    $response .= <<EOF;
    "$uuid": {
+     "online": true,
+     "status": "SUCCESS", 
 EOF
-
-	# Check whether the device is on so we can populate the "on" state
-	# for the "OnOff" trait. A device is also "on" if the brightness level
-	# is non-zero. Note that all lights have the "OnOff" trait so we
-	# unconditionally send the "on" state.
-	my $on = $devstate eq "on" || $devstate > 0 ? 'true' : 'false';
-
-	$response .= <<EOF;
-    "on": $on,
+	    $response .= $self->query_modes( $uuid );
+	    $response =~ s/,$//;    # Remove extra ','
+	    $response .= <<EOF;
+   },
 EOF
-
-	# If the device is dimmable we provided the "Brightness" trait, so we
-	# have to supply the "brightness" state.
-	my $mh_object = ::get_object_by_name($self->{'uuids'}->{$uuid}->{'realname'});
-	&main::print_log("[AoGSmartHome] Invalid device ".$self->{'uuids'}->{$uuid}->{'realname'}."; ignoring AoG item.") if ( !defined $mh_object );
-	return undef if !defined $mh_object;
-	if( $mh_object->can('is_dimmable') && $mh_object->is_dimmable ) {
-
-	    # INSTEON devices return "on" or "off". The AoG "Brightness" trait
-	    # expects needs "100" or "0", so we adjust here accordingly.
-	    if ($devstate eq 'on') {
-		$devstate = 100;
-	    } elsif ($devstate eq 'off') {
-		$devstate = 0;
+	    next;
+	} else {
+	    #
+	    # The device is a light, a switch, or an outlet.
+	    #
+    
+	    my $devstate = get_state( $self, $self->{'uuids'}->{$uuid} );
+	    if ( !defined $devstate ) {
+		$self->error( "Device $self->{'uuids'}->{$uuid}->{'realname'} has no state; ignoring AoG item.");
+		$response .= <<EOF;
+   "$uuid": {
+    "errorCode": "deviceNotFound"
+   },
+EOF
+		next;
 	    }
 
 	    $response .= <<EOF;
+   "$uuid": {
+     "status": "SUCCESS",
+     "online": true,
+EOF
+
+	    # Check whether the device is on so we can populate the "on" state
+	    # for the "OnOff" trait. A device is also "on" if the brightness level
+	    # is non-zero. Note that all lights have the "OnOff" trait so we
+	    # unconditionally send the "on" state.
+	    my $on = $devstate eq "on" || $devstate > 0 ? 'true' : 'false';
+    
+	    $response .= <<EOF;
+     "on": $on,
+EOF
+
+	    # If the device is dimmable we provided the "Brightness" trait, so we
+	    # have to supply the "brightness" state.
+
+	    my $mh_object = $self->get_mh_object($self->{'uuids'}->{$uuid}->{'realname'});
+	    return undef if !defined $mh_object;
+
+	    if( $mh_object->can('is_dimmable') && $mh_object->is_dimmable ) {
+    
+		# INSTEON devices return "on" or "off". The AoG "Brightness" trait
+		# expects needs "100" or "0", so we adjust here accordingly.
+		if ($devstate eq 'on'  ||  $devstate eq 'on_fast') {
+		    $devstate = 100;
+		} elsif ($devstate eq 'off'  ||  $devstate eq 'off_fast') {
+		    $devstate = 0;
+		}
+    
+		$response .= <<EOF;
     "brightness": $devstate,
 EOF
-	}
+	    }
 
-        $response .= <<EOF;
-    "online": true
+	    $response .= $self->query_modes( $uuid );
+	    $response =~ s/,$//;    # Remove extra ','
+
+	    $response .= <<EOF;
    },
 EOF
+	}
     }
 
     $response =~ s/,$//;    # Remove extra ','
@@ -751,13 +1066,45 @@ EOF
 }
 EOF
 
-    if ( $main::Debug{'aog'} ) {
-        print STDERR "[AoGSmartHome] Debug: action.devices.QUERY response:\n";
-        print STDERR $response;
-        print STDERR "[AoGSmartHome] Debug: end of response.\n";
-    }
+    $self->debug( 2, "action.devices.QUERY response: \n$response" );
 
     return &main::json_page($response);
+}
+
+sub query_modes {
+    my ( $self, $uuid, $exclude ) = @_;
+    my $response = '';
+
+    if( !defined $self->{'uuids'}->{$uuid}->{modes} ) {
+	$self->debug( 2, "query_modes for device $uuid, excluding '$exclude' -- no modes defined" );
+	return $response;
+    }
+
+    my @modelist = values %{$self->{'uuids'}->{$uuid}->{modes}};
+    $self->debug( 2, "Querying modes on  AOG device:\n    " . $self->dump( $self->{'uuids'}->{$uuid} ) );
+    $self->debug( 2, "   modelist:  " . $self->dump( @modelist ) );
+    $response .= <<EOF;
+      "currentModeSettings": {
+EOF
+    foreach my $mode (@modelist) {
+	if( $mode->{'keyname'} eq $exclude ) {
+	    $self->debug( 2, "Skipping '$exclude' in response" );
+	    next;
+	}
+	my $devstate = get_state( $self, $mode );
+	if ( !defined $devstate ) {
+	    $self->error( "Device $mode->{'realname'} has no state; ignoring AoG item.");
+	    next;
+	}
+	$response .= <<EOF;
+        "$$mode{keyname}": "${devstate}_key",
+EOF
+    }
+    $response =~ s/,$//;    # Remove extra ','
+    $response .= <<EOF;
+      },
+EOF
+    return $response;
 }
 
 sub FtoC { 
@@ -781,7 +1128,6 @@ sub execute_OnOff {
 
     my $turn_on;
 
-    &main::print_log( "Received execut command " . $command->{'execution'}->[0]->{'params'}->{'on'} );
     if( $command->{'execution'}->[0]->{'params'}->{'on'} == 1
     ||  $command->{'execution'}->[0]->{'params'}->{'on'} eq "true"
     ) {
@@ -791,7 +1137,8 @@ sub execute_OnOff {
     }
 
     foreach my $device ( @{ $command->{'devices'} } ) {
-        set_state( $self, $device->{'id'}, $turn_on ? 'on' : 'off' );
+	$self->debug( 1, "Received execute onoff command for $device->{'id'} -- " . $command->{'execution'}->[0]->{'params'}->{'on'} );
+        set_state( $self, $self->{'uuids'}->{$device->{'id'}}, $turn_on ? 'on' : 'off' );
 	$response .= qq["$device->{'id'}",];
     }
 
@@ -808,6 +1155,69 @@ EOF
     return $response;
 }
 
+sub execute_SetModes {
+    my ( $self, $command ) = @_;
+    my $response = '';
+
+    foreach my $device ( @{ $command->{'devices'} } ) {
+	$self->debug( 1, "Received execute command on $device->{id}: " . $self->dump($command->{'execution'}->[0]->{'params'}->{'updateModeSettings'}) );
+	foreach my $modekey ( keys %{$command->{'execution'}->[0]->{'params'}->{'updateModeSettings'}} ) {
+	    my $newvalue = $command->{'execution'}->[0]->{'params'}->{'updateModeSettings'}->{$modekey};
+	    $newvalue =~ s/_key$//;
+	    set_state( $self, $self->{'uuids'}->{$device->{'id'}}->{modes}->{$modekey}, $newvalue );
+	}
+        $response .= <<EOF;
+   {
+    "ids": [
+      "$device->{'id'}"
+    ],
+    "status": "SUCCESS",
+    "states": {
+      "online": true,
+EOF
+
+        #########
+	# note that MH items don't get their new state right away, so using query_modes doesn't get
+	#      the right state.  It is possible to make this work by using the set_now function, rather than
+	#      set -- hence the default for modes set sub is set_now.
+	#########
+	# However, there seems to be a bug in google home that if you use the UI to set one mode,
+	# all other modes on the device forget their state in the google home graph.  It doesn't matter
+	# if you return those other mode states on the execute call or not.
+	#########
+	if( 0 ) {
+        } elsif( 1 ) {
+            $response .= $self->query_modes( $device->{'id'} );
+	} else {
+	    $response .= <<EOF;
+      "currentModeSettings": {
+EOF
+	    foreach my $modekey ( keys %{$command->{'execution'}->[0]->{'params'}->{'updateModeSettings'}} ) {
+		my $newvalue = $command->{'execution'}->[0]->{'params'}->{'updateModeSettings'}->{$modekey};
+		$response .= <<EOF;
+	    "$modekey": "$newvalue",
+EOF
+	    }
+	    $response =~ s/,$//;
+	    $response .= <<EOF;
+      },
+EOF
+
+	}
+
+	$response =~ s/,$//;
+	$response .= <<EOF;
+    }
+   },
+EOF
+    }
+
+    # Remove extra ',' at the end
+    $response =~ s/,$//;
+
+    return $response;
+}
+
 sub execute_BrightnessAbsolute {
     my ( $self, $command ) = @_;
 
@@ -817,7 +1227,7 @@ sub execute_BrightnessAbsolute {
     my $brightness = $command->{'execution'}->[0]->{'params'}->{'brightness'};
 
     foreach my $device ( @{ $command->{'devices'} } ) {
-        set_state( $self, $device->{'id'}, $brightness);
+        set_state( $self, $self->{'uuids'}->{$device->{'id'}}, $brightness);
 	$response .= qq["$device->{'id'}",];
     }
 
@@ -841,7 +1251,7 @@ sub execute_ActivateScene {
     "ids": [';
 
     foreach my $device ( @{ $command->{'devices'} } ) {
-        set_state( $self, $device->{'id'});
+        set_state( $self, $self->{'uuids'}->{$device->{'id'}});
 	$response .= qq["$device->{'id'}",];
     }
 
@@ -868,16 +1278,15 @@ sub execute_ThermostatX {
     foreach my $device ( @{ $command->{'devices'} } ) {
 	my $realname = $self->{'uuids'}->{$device->{'id'} }->{'realname'};
 
-        my $mh_object = ::get_object_by_name($realname);
-	&main::print_log("[AoGSmartHome] Invalid device $realname; ignoring AoG item.") if ( !defined $mh_object );
-        return undef if !defined $mh_object;
+	my $mh_object = $self->get_mh_object($realname);
+	return undef if !defined $mh_object;
 
 	if ($mh_object->isa('Insteon::Thermostat') ) {
 	    my $mode = lc($mh_object->get_mode);
 	    $mode = 'heatcool' if ($mode =~ /auto/);
 
 	    if ( $execution_command =~ /TemperatureSetpoint/ ) {
-		&main::print_log("[AoGSmartHome] Setting temp: ".&CtoF($command->{'execution'}->[0]->{'params'}->{'thermostatTemperatureSetpoint'}) ) if ( $main::Debug{'aog'} );
+		$self->debug( 1,"Setting temp: ".&CtoF($command->{'execution'}->[0]->{'params'}->{'thermostatTemperatureSetpoint'}) );
 		my $setpoint = &CtoF($command->{'execution'}->[0]->{'params'}->{'thermostatTemperatureSetpoint'});
 		if ( $mode eq 'cool') {
 		    $mh_object->cool_setpoint($setpoint);
@@ -885,7 +1294,7 @@ sub execute_ThermostatX {
 		    $mh_object->heat_setpoint($setpoint);
 		}
 	    } elsif ( $execution_command =~ /ThermostatTemperatureSetRange/ ) {
-		&main::print_log("[AoGSmartHome] Setting cool: ".&CtoF($command->{'execution'}->[0]->{'params'}->{'thermostatTemperatureSetpointHigh'})." Heat: ".&CtoF($command->{'execution'}->[0]->{'params'}->{'thermostatTemperatureSetpointLow'})) if ( $main::Debug{'aog'} );
+		$self->debug( 1, "Setting cool: ".&CtoF($command->{'execution'}->[0]->{'params'}->{'thermostatTemperatureSetpointHigh'})." Heat: ".&CtoF($command->{'execution'}->[0]->{'params'}->{'thermostatTemperatureSetpointLow'}));
 		$mh_object->cool_setpoint( &CtoF($command->{'execution'}->[0]->{'params'}->{'thermostatTemperatureSetpointHigh'}) );
 		$mh_object->heat_setpoint( &CtoF($command->{'execution'}->[0]->{'params'}->{'thermostatTemperatureSetpointLow'}) );
 	    } elsif ( $execution_command =~ /ThermostatSetMode/ ) {
@@ -968,10 +1377,7 @@ sub execute {
   "commands": [
 EOF
 
-	if ($main::Debug{'aog'} > 2) {
-		$Data::Dumper::Maxdepth = 0;
-		print "Aog received execute request:\n    " . Dumper( $body );  
-	}
+    $self->debug( 2,  "Aog received execute request:\n    " . $self->dump( $body, 0 ) );;
     #
     # First, send the commands to all the devices specified in the request.
     #
@@ -983,6 +1389,9 @@ EOF
         }
         elsif ( $execution_command eq "action.devices.commands.BrightnessAbsolute" ) {
             $response .= execute_BrightnessAbsolute( $self, $command );
+        }
+        elsif ( $execution_command eq "action.devices.commands.SetModes" ) {
+            $response .= execute_SetModes( $self, $command );
         }
         elsif ( $execution_command eq "action.devices.commands.ActivateScene" ) {
             $response .= execute_ActivateScene( $self, $command );
@@ -1001,11 +1410,7 @@ EOF
 }
 EOF
 
-    if ( $main::Debug{'aog'} ) {
-        print STDERR "[AoGSmartHome] Debug: action.devices.EXECUTE response:\n";
-        print STDERR $response;
-        print STDERR "[AoGSmartHome] Debug: end of response.\n";
-    }
+    $self->debug( 2, "action.devices.EXECUTE response: \n$response" );
 
     return &main::json_page($response);
 }
@@ -1036,7 +1441,7 @@ sub uuid {
     my $idmap->{'idmap'} = $self->{'idmap'};
 
     my $file = $::config_parms{'data_dir'} . '/aogsmarthome_temp.saved_id';
-    store $idmap, $file;
+    nstore $idmap, $file;
 
     return $highid;
 

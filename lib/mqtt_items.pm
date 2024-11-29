@@ -43,6 +43,14 @@ Description:
     Author(s):
     Dave Neudoerffer <dave@neudoerffer.com>
 
+    MQTT (mqtt.pm)
+    --------------
+    This module uses mqtt.pm to create an object that communicates to the mqtt server.
+
+    There are several generic functions in this module that will do things to/with
+    all of the objects that are created for that mqtt server.
+
+
     MQTT Items (mqtt_items.pm)
     --------------------------
 
@@ -97,16 +105,20 @@ Description:
 
 	    mqtt_InstMqttItem
 	        - implements a statically defined mh item for Insteon devices managed
-		  by insteon-mqtt
+		  by insteon-mqtt OR another instance of MisterHouse (since the MH published
+		  MQTT messages are based on insteon-mqtt).  You could also use discovered items
+		  for this purpose.
 		- see https://github.com/TD22057/insteon-mqtt
-		- can pulish HA discovery info, as insteon-mqtt does not implement discovery yet
+		- can publish HA discovery info, as insteon-mqtt does not implement discovery yet
     
 
     Discovery (mqtt_discovery.pm):
     -----------------------------
 
     This module implements MQTT discovery.  Both publishing discovery information for locally
-    defined devices, as well as receiving discovery information from mqtt devices.
+    defined devices, as well as receiving discovery information from mqtt devices and from other
+    mqtt sources -- like home assistant.
+
     The discovery definitions are based on the Home Assistant Discovery info:
         https://www.home-assistant.io/docs/mqtt/discovery
 
@@ -122,36 +134,49 @@ Description:
 
     There are 2 classes implemented in mqtt_discovery.pm:
 
-	    mqtt_DiscoveredItem:
-		- implements an mh item from a mqtt discovery message
-		- this class extends the mqtt_BaseRemoteItem class
-		- it has been built to handle 2 types of discovery messages:
-		    1. discovery messages as published by the below discovery
-		       class primarily for mqtt_LocalItems, but discovery info
-		       for RemoteItems and InstMqttItems can also be published.
-		       This allows easy sharing of device definitions between MH instances,
-		       and also allows Home Assistant to know about MH items.
-		    2. discovery messages published by remote devices.
-		       It handles some Tasmota, IOT4 discovery messages published
-		       when Tasmota SetOption19 is set to 1, or HASS discovery turned on
-		       on the IOT4 device.  I don't have any ESPurna devices so I don't
-		       know about discovery for those devices.
-		       - it handles switch, light, sensor and binary-sensor
-		       - so far the handling of discovery messages is somewhat limited due
-			 to my very limited set of these devices
-		       - I have implemented these devices based on HomeAssistant documentation
-		         for discovery and information on blakaddr.com
-		       - In order to implement this properly, we would need a templating engine in perl
+	mqtt_DiscoveredItem:
+	    This class extends the mqtt_BaseRemoteItem class and implements
+	    a mh item from a mqtt discovery message.
+	    It has been built to handle 2 types of discovery messages:
+		1. discovery messages as published by the below discovery
+		   class primarily for mqtt_LocalItems, but discovery info
+		   for RemoteItems and InstMqttItems can also be published.
+		   This allows easy sharing of device definitions between MH instances,
+		   and also allows Home Assistant to know about MH items.
+		2. discovery messages published by remote devices.
+		   It handles some Tasmota, IOT4 discovery messages published
+		   when Tasmota SetOption19 is set to 1, or HASS discovery turned on
+		   on the IOT4 device.  I don't have any ESPurna devices so I don't
+		   know about discovery for those devices.
+		   - it handles switch, light, sensor and binary-sensor
+		   - so far the handling of discovery messages is somewhat limited due
+		     to my very limited set of these devices
+		   - I have implemented these devices based on HomeAssistant documentation
+		     for discovery and information on blakaddr.com
+		   - In order to implement this properly, we would need a templating engine in perl
+
+	    You can move one of the items from the file written out by write_discovered_items, or
+	    you could hand code an item of this type using a full discovery message.  When you are
+	    hand declaring an mqtt item using this format, change the discovery_topic to just
+	    the discovery_type -- that will internally mark it so that it is not written out
+	    next time write_discovered_items is called.
 	
-    mqtt_Discovery:
-         - is a class that listens for mqtt discovery messages
-           based on an mqtt wildcard
-	 - creates mqtt_DiscoveredItems based on the published discovery information
-	 - you can then write out these items to a .mht file using the write_discovered_items method
-	     - note that the discovered items will not appear as fully referencable MH items
-	       until you restart MH once.
-         - this class will also publish discovery information for mqtt_LocalItems and
-           even for any of the mqtt_BaseRemoteItems if they are created with the discovery flag set
+	mqtt_Discovery:
+	     This class has 2 functions.  The discovery_action parameter defines which ones
+	     it does -- publish, subscribe, both, none.
+
+	     Subscribe:
+	         - it defines a single mqtt_BaseItem that that listens for mqtt discovery messages
+	           based on an mqtt wildcard
+		 - creates mqtt_DiscoveredItems based on the discovery information that is received
+		 - you can then write out these items to a .mht file using the mqtt::write_discovered_items class function
+		     - note that the discovered items will not appear as fully referencable MH items
+		       until you restart MH once.
+	     Publish:
+	         - this class will setup publishing of discovery information for mqtt_LocalItems and
+	           even for any of the mqtt_BaseRemoteItems if they are created with the discovery flag set
+	         - this last part is useful if you have an mqtt device somewhere whose discovery
+		   info is not great, or doesn't publish discovery info
 
 
 
@@ -161,17 +186,42 @@ License:
 Usage:
 
     .mht file:
+	###################################################
+	# Broker record creates object to connect to mqtt server
+	###################################################
 
-	# MQTT_BROKER,	name,	   subscribe topic,	host/ip,	port,	user,	    pwd,	keepalive
-	MQTT_BROKER,	mqtt_1,	   ,			localhost,	1883,	,	    ,		121
+	# MQTT_BROKER,	name,	   subscribe topic,	host/ip,	port,	user,	pwd,	keepalive
+	MQTT_BROKER,	mqtt_1,	   ,			localhost,	1883,	,	,	121
 
-	# Used to define mqtt items as published by insteon-mqtt project
-	# TopicPattern should be of the form "<realm>/<mqtt name>/+". 
+	###################################################
+	# Use of Discovery functionality is optional
+	# - discovery topic prefix is used for publishing discovery info
+	#     - it can be blank which means no discovery info will be published
+	#     - the most common use is to publish discovery info to home assistant,
+	#       the home assistant default discovery topic is 'homeassistant'
+	###################################################
+
+	# MQTT_DISCOVERY,   obj name,		discovery prefix,   broker,	publish|subscribe|both (default both)
+	MQTT_DISCOVERY,	    mqtt_discovery1,	homeassistant,	    mqtt_1,	both
+
+
+	###################################################
+	# Different Item types for different types of MQTT functionality
+	#
+	# TopicPattern should be of the form "<node_id>/<mqtt name>/+".
+	#    - It is best to use the same <node_id> for all items, but not necessary
+	#    - It helps identify your own discovery messages in a large mqtt system
+	###################################################
+
+	# Used to define mqtt items as published by insteon-mqtt project or as published
+	# by another instance of MisterHouse which has defined MQTT_LOCALITEMs.
+	#
 	# MQTT_INSTMQTT,    name,		groups,		broker, type,		topicpattern,				    discoverable    Friendly Name
 	MQTT_INSTMQTT,	    bootroom_switch,	Lights,		mqtt_1, switch,		insteon/bootroom/+,			    1,		    Bootroom Light
 
 	# Define a Tasmota item.  Note that the topicpattern must be in the order that the device will
 	# send.  This is configured in the Tasmota MQTT configuration. 
+	#
 	# MQTT_REMOTEITEM,  name,		groups,		broker, type,		topicpattern,				    discoverable    Friendly Name
 	MQTT_REMOTEITEM,    tas_outdoor_plug,	,		mqtt_1, switch,		tasmota_outdoor_plug/+/+,		    0,		    Tasmota Outdoor Plug
 
@@ -179,25 +229,29 @@ Usage:
         # Say you have a local INSTEON item  (could be any kind of misterhouse item)
 	INSTEON_SWITCHLINC, 52.9E.DD,		shed_light,	Lights|Outside
 	#
-        # Then you can create an mqtt item to publish its state and receive mqtt commands
-	# TopicPattern should be of the form "<realm>/<mqtt name>/+". 
+        # Then you can create an mqtt item to publish its state and receive mqtt commands.
+	# TopicPattern should be of the form "<node_id>/<mqtt name>/+".
+	# *** This can be used to publish local MH items to Home Assistant.
+	#
 	# MQTT_LOCALITEM,   name,		local item,	broker, type,		topicpattern,				    discoverable    Friendly Name
 	MQTT_LOCALITEM,	    bootroom_switch,	shed_light,	mqtt_1, switch,		insteon/bootroom/+,			    1,		    Bootroom Light
 	#
 
 
-	###################################################
-	# Use of Discovery functionality is optional
-	###################################################
-
-	# MQTT_DISCOVERY,   obj name,		discovery topic prefix, broker
-	MQTT_DISCOVERY,	    mqtt_discovery1,	homeassistant,		mqtt_1
 	
     .mht generated file:
 
-	# Discovery items are generated by the write_discovered_items function
-	# You would not normally code these by hand
-	# MQTT_DISCOVEREDITEM,	name,			    discovery_obj,	discovery_topic,			    discovery_message
+	# Discovery items are generated by the write_discovered_items function.
+	# You would not normally code these by hand.
+	#
+	# But if you want to move an item to your regular .mht file, change the discovery_topic to just
+	# the discovery_type.  That then will override any discovered item with the same unique_id,
+	# and will not be written out with write_discovered_items.
+	#
+	# You could code one of these items by hand. This would also allow you to declare a remote
+	# mqtt item using the full discovery message format.
+	#
+	# MQTT_DISCOVEREDITEM,	name,			    discovery_obj,	discovery_topic/discovery_type,			    discovery_message
 	MQTT_DISCOVEREDITEM,	mqtt_tasmota_outdoor_plug,  mqtt_discovery,	 homeassistant/switch/877407_RL_1/config,   {"name":"Tasmota Outside Plug","cmd_t":"~cmnd/POWER","stat_t":"~tele/STATE","val_tpl":"{{value_json.POWER}}","pl_off":"OFF","pl_on":"ON","avty_t":"~tele/LWT","pl_avail":"Online","pl_not_avail":"Offline","uniq_id":"877407_RL_1","device":{"identifiers":["877407"],"connections":[["mac","D8:F1:5B:87:74:07"]]},"~":"tasmota_outdoor_plug/"}
 
 
@@ -219,10 +273,13 @@ Usage:
 	}
 
 	# this will publish mqtt discovery messages for all discoverable items
-	$mqtt_discovery1->publish_discovery_data();
+	$mqtt_1->publish_discovery_data();
+
+	# this will publish current state messages for all local items
+	$mqtt_1->publish_current_states();
 
 	# this will write a .mht file with data for all discovered items
-	&mqtt_Discovery::write_discovered_items( "mqtt_discovered_items.mht" );
+	&mqtt::write_discovered_items( "$config_parms{data_dir}/mqtt_discovered_items.mht" );
 
     CLI generation of a command to the CR_Temp
 
@@ -251,7 +308,7 @@ Notes:
     your Tasmota devices to have a qualified prefix.
 
     Discovery:
-    For discovery, there are a lot of devices types out there and a lot of different
+    For discovery, there are a lot of device types out there and a lot of different
     discovery message formats.  I have handled common device types in this code,
     but it can be extended to handle many more. I have only been able to implement
     Tasmota switches and a rough implementation of Tasmota Dimmers based on zapping
@@ -268,10 +325,6 @@ Notes:
     =item B<UnDoc>
 
     =item B<ToDo>
-
-    There are a number of things that need to be done. There is a lack of error
-    checking and connectivity checks and restoration. I'm sure there are a huge
-    number of features that need to be added.
 
     @TODO:
         1. Add more Tasmota types
@@ -313,10 +366,10 @@ sub new {   ### mqtt_BaseItem
     $self->{topic}		    = $listentopics;
     $self->{disc_type}		    = $type;
 
-    if( !grep( /^$type$/, ('light', 'switch', 'binary_sensor', 'sensor', 'scene', 'multi_switch') ) ) {
-	$self->error( "UNKNOWN DEVICE TYPE: '$self->{mqtt_name}':$self->{mqtt_type}" );
-	return;
-    }
+#     if( !grep( /^$type$/, ('light', 'switch', 'binary_sensor', 'sensor', 'scene', 'select') ) ) {
+# 	$self->error( "UNKNOWN DEVICE TYPE: '$self->{mqtt_name}':$self->{mqtt_type}" );
+# 	return;
+#     }
 
     if( $self->{mqtt_type} eq 'scene' ) {
 	$self->{disc_type} = 'switch';
@@ -335,20 +388,36 @@ sub new {   ### mqtt_BaseItem
 
 sub log {
     my( $self, $str ) = @_;
-    &main::print_log( 'MQTT: '. $str );
+    $self->{interface}->log( $str );
 }
 
 sub error {
     my( $self, $str ) = @_;
-    &main::print_log( "MQTT ERROR: $str" );
+    $self->{interface}->error( $str );
 }
 
 sub debug {
     my( $self, $level, $str ) = @_;
     if( $self->debuglevel( $level, 'mqtt' ) ) {
-	&main::print_log( "MQTT D$level: $str" );
+	$self->{interface}->log( $str, "[MQTT D$level]: " );
     }
 }
+
+sub dump {
+    my( $self, $obj, $maxdepth ) = @_;
+    $obj = $obj || $self;
+    $maxdepth = $maxdepth || 2;
+    my $dumper = Data::Dumper->new( [$obj] );
+    $dumper->Maxdepth( $maxdepth );
+    return $dumper->Dump();
+}
+
+
+=item C<set_object_debug( level )>
+
+Turns on debugging for the object, sets debug level.
+
+=cut
 
 sub set_object_debug {
     my( $self, $level ) = @_;
@@ -432,6 +501,7 @@ sub process_template {
     my( $self, $template, $value_json, $value ) = @_;
 
     if( $template ) {
+	$template =~ s/ //g;
 	$template =~ s/^\{\{value_json\.([a-zA-Z\-_]*)\}\}/\$value_json->\{\1\}/;
 	$template =~ s/^\{\{value_json\[\\?\'?([a-zA-Z\-_]*)\\?\'?\]\}\}/\$value_json->\{\1\}/;
 	if( $template !~ /^\$/ ) {
@@ -450,13 +520,14 @@ sub process_template {
 sub decode_mqtt_payload {
     my( $self, $topic, $payload, $retained ) = @_;
     my $msg;
+    my $unset_value = 'unset_value_987654123';
     my $value_json;
     my $value;
     my $brightness;
     my $value_on;
     my $value_off;
 
-    $msg = undef;
+    $msg = $unset_value;
     if( $topic eq $self->{disc_info}->{state_topic} ) {
 	$value_on = $self->{disc_info}->{state_on};
 	$value_off = $self->{disc_info}->{state_off};
@@ -544,14 +615,22 @@ sub decode_mqtt_payload {
 	}
     } elsif( $$self{mqtt_type} eq 'sensor' ) {
         $msg = $value;
-    } elsif( $$self{mqtt_type} eq 'multi_switch' ) {
+    } elsif( $$self{mqtt_type} eq 'select' ) {
+        $msg = $value;
+    } elsif( $$self{mqtt_type} eq 'text' ) {
+        $msg = $value;
+    } elsif( $$self{mqtt_type} eq 'number' ) {
+        $msg = $value;
+    } elsif( $$self{mqtt_type} eq 'cover' ) {
         $msg = $value;
     } else {
-	$self->error( "Unknown object type '$$self{mqtt_type}' on object '$$self{topic}'" );
+	$self->debug( 2, "Unknown object type '$$self{mqtt_type}' on object '$$self{topic}'" );
+	$msg = $value_json;
     }
-    if( !$msg ) {
-	$self->error( "Unable to decode mqtt message '$payload'" );
+    if( $msg eq $unset_value ) {
+        $self->error( "Unable to decode mqtt message for $$self{mqtt_name} type:$$self{mqtt_type} message:'$payload'" );
 	# $self->error( Dumper( $self ) );
+	$msg = undef;
     }
     return $msg;
 }
@@ -581,7 +660,10 @@ sub encode_mqtt_payload {
 	($level) = $setval =~ /^([1]?[0-9]?[0-9])%?$/;
     }
     if( $self->{mqtt_type} eq 'sensor'
-    ||  $self->{mqtt_type} eq 'multi_switch'
+    ||  $self->{mqtt_type} eq 'select'
+    ||  $self->{mqtt_type} eq 'text'
+    ||  $self->{mqtt_type} eq 'number'
+    ||  $self->{mqtt_type} eq 'cover'
     ) {
 	$payload = $setval;
 	return $payload;
@@ -842,22 +924,57 @@ sub create_discovery_message {
     &mqtt_BaseItem::normalize_discovery_info( $self->{disc_info} );
 
     my $msg = {};
-    my $discovery_realm;
+    my $discovery_node_id;
 
     my $disc_topic;
     my $disc_msg;
 
     # Note that the discovery topic prefix will be added by the mqtt_Discovery object
     # when the discovery messages are published
-    if( $self->{realm} ) {
-         $disc_topic = "$self->{disc_type}/$self->{realm}/$self->{disc_info}->{unique_id}/config";
+    if( $self->{node_id} ) {
+         $disc_topic = "$self->{disc_type}/$self->{node_id}/$self->{disc_info}->{unique_id}/config";
     } else {
          $disc_topic = "$self->{disc_type}/$self->{disc_info}->{unique_id}/config";
     }
-    $disc_msg = encode_json( $self->{disc_info} );
+    my $json_obj = JSON->new->allow_nonref(1);
+    $disc_msg = $json_obj->encode( $self->{disc_info} );
 
     $self->{disc_topic} = $disc_topic;
     $self->{disc_msg} = $disc_msg;
+
+    $self->publish_discovery_message();
+}
+
+sub publish_discovery_message {
+    my ($self) = @_;
+    my $topic;
+    my $msg;
+    my $interface;
+
+    $interface = $self->{interface};
+    if( !$self->{interface}->isConnected() ) {
+	$self->error( "Unable to publish discovery data -- $interface->{instance} not connected" );
+	return 0;
+    }
+    if( !$self->{interface}->{discovery_publish_prefix} ) {
+	return 0;
+    }
+    if( !$self->{discoverable} ) {
+	$self->debug( 2, "Non-discoverable object skipped: ".  $self->{mqtt_name} );
+	return 0;
+    }
+    if( $self->{mqtt_type} eq 'discovery' ) {
+	return 0;
+    }
+
+    my ($topic, $msg) = ($self->{disc_topic}, $self->{disc_msg});
+    if( $topic  &&  $msg ) {
+	$topic = "$self->{interface}->{discovery_publish_prefix}/$topic";
+	$self->debug( 2, "Publishing discovery message T:'$topic'   M:'$msg'" );
+	$self->transmit_mqtt_message( $topic, $msg, 1 );
+	return 1;
+    }
+    return 0;
 }
 
 # -[ Fini - mqtt_BaseItem ]---------------------------------------------------------
@@ -870,6 +987,7 @@ package mqtt_LocalItem;
 use strict;
 
 use Data::Dumper;
+use Hash::Merge;
 
 @mqtt_LocalItem::ISA = ( 'mqtt_BaseItem' );
 
@@ -885,7 +1003,11 @@ sub new {     ### mqtt_LocalItem
 
     my ($base_type, $device_class) = $type =~ m/^([^:]*):?(.*)$/;
 
-    if( !grep( /^$base_type$/, ('light','switch','binary_sensor', 'sensor', 'scene', 'multi_switch' ) ) ) {
+    #auto populate type and class if the object has these elements embedded, but don't override explicitly set definitions
+    $base_type = $local_object->{mqttlocalitem}->{base_type} if ((defined $local_object->{mqttlocalitem}->{base_type} ) and (!$type));
+    $device_class = $local_object->{mqttlocalitem}->{device_class} if ((defined $local_object->{mqttlocalitem}->{device_class} ) and (!$device_class));
+       
+    if( !grep( /^$base_type$/, ('light','switch','binary_sensor', 'sensor', 'scene', 'select', 'text', 'number', 'cover' ) ) ) {
 	$interface->error( "Invalid mqtt type '$type'" );
 	return;
     }
@@ -895,10 +1017,10 @@ sub new {     ### mqtt_LocalItem
 	return;
     }
 
-    my (@topic_parts) = split( "/", $topicpattern );
-    my $realm = $topic_parts[0];
-    my $mqtt_name = $topic_parts[1];
-    my $topic_prefix = "$realm/$mqtt_name";
+    my (@topic_parts) = split( "/", $topicpattern, 2 );
+    my $node_id = $topic_parts[0];
+    my $mqtt_name = ($topic_parts[1] =~ s"/[+#]?$""r);	# Remove trailing slash and wildcard, if present.
+    my $topic_prefix = "$node_id/$mqtt_name";
     my $listen_topic;
     if( $#topic_parts == 1 ) {
 	$listen_topic = "$topic_prefix/+";
@@ -916,8 +1038,9 @@ sub new {     ### mqtt_LocalItem
 
     bless $self, $class;
 
-    $self->{realm} = $realm;
+    $self->{node_id} = $node_id;
     $self->debug( 1, "New mqtt_LocalItem( $interface->{instance}, '$mqtt_name', '$type', '$local_object', '$topicpattern', $discoverable, '$friendly_name' )" );
+    $self->debug( 1,"Base_type=[$base_type] Device_Class=[$device_class]");
 
     $self->{disc_info} = {};
     if( !$friendly_name ) {
@@ -933,6 +1056,11 @@ sub new {     ### mqtt_LocalItem
 	$self->{disc_info}->{brightness_scale} = 100;
     } elsif( $base_type eq 'switch' ) {
 	$self->{disc_info}->{command_topic} = "$topic_prefix/set";
+	} elsif( $base_type eq 'cover' ) {
+	$self->{disc_info}->{command_topic} = "$topic_prefix/set";
+	if( $device_class ) {
+	    $self->{disc_info}->{device_class} = $device_class;
+	}
     } elsif( $base_type eq 'scene' ) {
 	$self->{disc_info}->{command_topic} = "$topic_prefix/set";
 	delete $self->{disc_info}->{state_topic};
@@ -947,7 +1075,15 @@ sub new {     ### mqtt_LocalItem
 	if( $device_class eq 'temperature' ) {
 	    $self->{disc_info}->{unit_of_measurement} = 'C';
 	}
-    } elsif( $base_type eq 'multi_switch' ) {
+    } elsif( $base_type eq 'select' ) {
+	$self->{disc_info}->{command_topic} = "$topic_prefix/set";
+	if( $local_object ) {
+	    my @state_list = $local_object->get_states();
+	    $self->{disc_info}->{options} = \@state_list;
+	}
+    } elsif( $base_type eq 'text' ) {
+	$self->{disc_info}->{command_topic} = "$topic_prefix/set";
+    } elsif( $base_type eq 'number' ) {
 	$self->{disc_info}->{command_topic} = "$topic_prefix/set";
     }
 
@@ -961,22 +1097,45 @@ sub new {     ### mqtt_LocalItem
     }
 
     if( $self->{local_item}  &&  $self->{local_item}->{device_id} ) {
-	$self->{disc_info}->{unique_id} = $self->{realm} . '_' . $self->{local_item}->{device_id};
+	$self->{disc_info}->{unique_id} = $self->{node_id} . '_' . $self->{local_item}->{device_id};
 	if( $self->{local_item}->{m_group} ) {
 	    $self->{disc_info}->{unique_id} .= $self->{local_item}->{m_group};
 	}
     } else {
-	$self->{disc_info}->{unique_id} = $self->{realm} . '_' . $self->{mqtt_name};
+	$self->{disc_info}->{unique_id} = $self->{node_id} . '_' . $self->{mqtt_name};
 	$self->{disc_info}->{unique_id} =~ s/ /_/g;
     }
 
-    $self->create_discovery_message();
+    # $self->create_discovery_message();
 
-    $Data::Dumper::Maxdepth = 3;
-    $self->debug( 3, "locale item created: \n" . Dumper( $self ) );
+
+    # my $d = Data::Dumper->new( [$self] );
+    # $d->Maxdepth( 3 );
+    # $self->debug( 3, "locale item created: \n" . $d->Dump );
+
 
     # We may need flags to deal with XML, JSON or Text
     return $self;
+}
+
+sub add_discovery_info {
+    my ($self,$extra_disc_info) = @_;
+
+    my $merger = Hash::Merge->new( 'RIGHT_PRECEDENT' );
+    $self->{disc_info} = $merger->merge( $self->{disc_info}, $extra_disc_info );
+
+#    foreach my $key (keys %{$extra_disc_info}) {
+#	if( exists $extra_disc_info  &&  ref $extra_disc_info->{$key} eq 'HASH' ) {
+#	    if( !exists $self->{disc_info}->{$key} ) {
+#		$self->{disc_info}->{$key} = {};
+#	    }
+#	    for my $key2 (keys %{$extra_disc_info->{
+#
+#	if( exists $self->{disc_info}->{$key} ) {
+#	    $self->log( "Overriding $key in discovery info for: $self->{object_name}" );
+#	}
+#	$self->{disc_info}->{$key} = $extra_disc_info->{$key};
+#    }
 }
 
 =item C<receive_mqtt_message( topic, message, retained )>
@@ -1001,7 +1160,7 @@ sub receive_mqtt_message {
 	$obj_name = $self->get_object_name();
     }
     if( $topic eq $self->{disc_info}->{state_topic} ) {
-	$self->debug( 1, "LocalItem $obj_name ignoring state topic message" );
+	$self->debug( 2, "LocalItem $obj_name ignoring state topic message" );
     } elsif( $topic eq $self->{disc_info}->{command_topic} ) {
 	if( $retained ) {
 	    # command messages should never be retained, but just in case...
@@ -1063,52 +1222,48 @@ sub set {    ### LocalItem
     }
 }
 
-=item C<(publish_current_states( only_unpublished ))>
-    Class function to publish the current states of all local mqtt objects
-
-    If only_unpublished is true, only the current states of objects that have not published
-    their state since MH started will be published.
-
-    This function should be called after the local item states have been restored after
-    startup if there is no initial function that gets current states of local items.
-        For example, INSTEON devices are polled at startup of misterhouse to determine current states
-	This polling will set the state of the local item which will publish to mqtt
-=cut
-
-sub publish_current_states {
-    my( $only_unpublished ) = @_;
-    my $obj;
+sub publish_state {
+    my( $self, $only_unpublished ) = @_;
     my $msg;
     my $msg_txt;
     my $hass_type;
     my $obj_id;
 
+    if( !$only_unpublished  ||  !$self->{has_published_state} ) {
+	my $local_item;
+	if( $self->{local_item} ) {
+	    $local_item = $self->{local_item};
+	} else {
+	    $local_item = $self;
+	}
+	my $current_state = $local_item->state;
+	my $self_name = $local_item->get_object_name();
+	if( defined $current_state ) {
+	    if( !$local_item->can('is_responder') || $local_item->is_responder ) {
+		$self->debug( 1, "setting local object $self_name to current_state: $current_state" );
+		$local_item->set( $current_state );
+	    } else {
+		$self->debug( 1, "object $self_name is not a responder" );
+	    }
+	} else {
+	    $self->debug( 1, "object $self_name has no state" );
+	}
+    }
+}
+
+
+=item C<(publish_current_states( only_unpublished ))>
+    Class function to publish the current states of all local mqtt objects for all mqtt servers
+
+    This function has been replaced by publish_current_states() on the mqtt object
+=cut
+
+sub publish_current_states {
+    my( $only_unpublished ) = @_;
+
     &mqtt::log( undef, "Publishing current state data for local objects" );
     foreach my $interface ( &mqtt::get_interface_list() ) {
-	for my $obj ( @{ $$interface{objects} } ) {
-	    if( $obj->{is_local} ) {
-		if( !$only_unpublished  ||  !$obj->{has_published_state} ) {
-		    my $local_item;
-		    if( $obj->{local_item} ) {
-			$local_item = $obj->{local_item};
-		    } else {
-			$local_item = $obj;
-		    }
-		    my $current_state = $local_item->state;
-		    my $obj_name = $local_item->get_object_name();
-		    if( defined $current_state ) {
-			if( !$local_item->can('is_responder') || $local_item->is_responder ) {
-			    $obj->debug( 1, "setting local object $obj_name to current_state: $current_state" );
-			    $local_item->set( $current_state );
-			} else {
-			    $obj->debug( 1, "object $obj_name is not a responder" );
-			}
-		    } else {
-			$obj->debug( 1, "object $obj_name has no state" );
-		    }
-		}
-	    }
-	}
+	$interface->publish_current_states( $only_unpublished );
     }
 }
 
@@ -1190,8 +1345,11 @@ sub receive_mqtt_message {
     if( $topic eq $self->{disc_info}->{state_topic} 
     ||  $topic eq $self->{disc_info}->{brightness_state_topic}
     ) {
-	if( $self->{disc_info}->{optimistic} eq 'true' ) {
+	if( $self->{disc_info}->{optimistic} eq 'true'  &&  $self->{pending_state} ) {
 	    $self->debug( 2, "BaseRemoteItem $self->{object_name} ignored state message because device is optimistic" );
+	    $self->{pending_state}    = undef;
+	    $self->{pending_setby}    = undef;
+	    $self->{pending_response} = undef;
 	} else {
 	    if( $retained ) {
 		$p_setby = 'mqtt [retained]';
@@ -1207,6 +1365,10 @@ sub receive_mqtt_message {
 		$p_setby = 'mqtt';
 	    }
 	    $setval = $self->decode_mqtt_payload( $topic, $message, $retained );
+	    if( ref $setval ) {
+		$self->{state_obj} = $setval;
+		$setval = undef;
+	    }
 	    if( $setval ) {
 		$self->debug( 1, "remote item MQTT to MH $$self{mqtt_name} set($setval, '$p_setby')" );
 		$self->level( $setval ) if $self->can( 'level' );
@@ -1216,13 +1378,18 @@ sub receive_mqtt_message {
 	return;
     }
     if( $topic eq $self->{disc_info}->{availability_topic} ) {
+	if( $retained ) {
+	    $p_setby = 'mqtt [retained]';
+	} else {
+	    $p_setby = 'mqtt';
+	}
 	if( $message eq $self->{disc_info}->{payload_available} ) {
 	    if( !$retained ) {
 		$self->log( "$self->{object_name} now available" );
 	    }
 	} elsif( $message eq $self->{disc_info}->{payload_not_available} ) {
 	    $self->log( "$self->{mqtt_name} is not available" );
-	    $self->SUPER::set( $message, "mqtt" );
+	    $self->SUPER::set( $message, $p_setby );
 	} else {
 	    $self->error( "$self->{object_name} received unrecognized availability message: $message" );
 	}
@@ -1287,13 +1454,13 @@ sub set {    ### BaseRemoteItem
 	$self->transmit_topic( 'command_topic', $setval );
     }
 
+    $self->{pending_state}    = $setval;
+    $self->{pending_setby}    = $p_setby;
+    $self->{pending_response} = $p_response;
     if( $self->{disc_info}->{optimistic} eq 'true') {
 	$self->level( $setval ) if $self->can( 'level' );
 	$self->SUPER::set( $setval, $p_setby, $p_response );
     } else {
-	$self->{pending_state}    = $setval;
-	$self->{pending_setby}    = $p_setby;
-	$self->{pending_response} = $p_response;
 	$self->debug( 2, "Pending $self->{object_name}-->set( $setval, $p_setby, $p_response )" );
     }
 }
@@ -1368,7 +1535,7 @@ sub new {      ### mqtt_RemoteItem
 
     my ($base_type, $device_class) = $type =~ m/^([^:]*):?(.*)$/;
 
-    if( !grep( /$base_type/, ('light','switch','sensor','binary_sensor') ) ) {
+    if( !grep( /$base_type/, ('light','switch','sensor','binary_sensor','cover') ) ) {
 	$interface->error( "Invalid InstMqttItem type '$type'" );
 	return;
     }
@@ -1450,10 +1617,7 @@ sub new {      ### mqtt_RemoteItem
     $self->{disc_info}->{unique_id} = 'tasmota_' . $self->{mqtt_name};
     $self->{disc_info}->{unique_id} =~ s/ /_/g;
 
-    $self->create_discovery_message();
-
-    # $Data::Dumper::Maxdepth = 3;
-    # $self->debug( 1, "TasmotaItem created: \n" . Dumper( $self ) );
+    # $self->create_discovery_message();
 
     # We may need flags to deal with XML, JSON or Text
     return $self;
@@ -1483,15 +1647,15 @@ sub new {      ### mqtt_InstMqttItem
 
     my ($base_type, $device_class) = $type =~ m/^([^:]*):?(.*)$/;
 
-    if( !grep( /$base_type/, ('light','switch','binary_sensor','sensor','scene' ) ) ) {
+    if( !grep( /$base_type/, ('light','switch','binary_sensor','sensor','scene', 'cover' ) ) ) {
 	$interface->error( "Invalid InstMqttItem type '$type'" );
 	return;
     }
 
     my (@topic_parts) = split( "/", $topicpattern );
-    my $realm = $topic_parts[0];
+    my $node_id = $topic_parts[0];
     my $mqtt_name = $topic_parts[1];
-    my $topic_prefix = "$realm/$mqtt_name";
+    my $topic_prefix = "$node_id/$mqtt_name";
     if( !$mqtt_name ) {
 	$interface->error( "Unrecognized topic pattern '$topicpattern' for device '$friendly_name'" );
     }
@@ -1506,7 +1670,7 @@ sub new {      ### mqtt_InstMqttItem
 
     $self->debug( 1, "New mqtt_InstMqttItem( $interface->{instance}, '$mqtt_name', '$type', '$topicpattern', $discoverable, '$friendly_name' )" );
 
-    $self->{realm} = $realm;
+    $self->{node_id} = $node_id;
     $self->{discovered} = 0;
 
 
@@ -1517,7 +1681,7 @@ sub new {      ### mqtt_InstMqttItem
     }
     $self->{disc_info}->{name} = $friendly_name;
     if( $base_type eq 'scene' ) {
-	$self->{disc_info}->{command_topic} = "$realm/modem/scene";
+	$self->{disc_info}->{command_topic} = "$node_id/modem/scene";
 	$self->{disc_info}->{optimistic} = 'true';
 	$self->{disc_info}->{payload_on} =  "{ \"cmd\" : \"ON\", \"name\" : \"$mqtt_name\" }";
 	$self->{disc_info}->{payload_off} =  "{ \"cmd\" : \"OFF\", \"name\" : \"$mqtt_name\" }";
@@ -1528,6 +1692,7 @@ sub new {      ### mqtt_InstMqttItem
 	    $self->{disc_info}->{command_topic} = "$topic_prefix/level";
 	    $self->{disc_info}->{schema} = 'json';
 	    $self->{disc_info}->{brightness} = "true";
+	    $self->{disc_info}->{brightness_scale} = 100;
 	} elsif( $base_type eq 'binary_sensor' ) {
 	    $self->{disc_info}->{device_class} = $device_class;
 	} elsif( $base_type eq 'sensor' ) {
@@ -1537,9 +1702,9 @@ sub new {      ### mqtt_InstMqttItem
     $self->{disc_info}->{unique_id} = $self->{mqtt_name};
     $self->{disc_info}->{unique_id} =~ s/ /_/g;
 
-    $self->create_discovery_message();
+    # $self->create_discovery_message();
 
-    # $Data::Dumper::Maxdepth = 3;
+
     # $self->debug( 1, "InstMqttItem created: \n" . Dumper( $self ) );
 
     # We may need flags to deal with XML, JSON or Text
